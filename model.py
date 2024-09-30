@@ -45,7 +45,7 @@ class PositionalEncoding(nn.Module):
 
     def forward(self, x):
         # (batch_size, seq_length, d_model) --> (batch_size, seq_length, d_model)
-        x = x + self.positional_encoding.requires_grad_(False)
+        x = x + self.positional_encoding[:, :x.shape[1], :].requires_grad_(False)
         x = self.dropout(x)
         return x
 
@@ -206,12 +206,12 @@ class DecoderBlock(nn.Module):
 
     def forward(self, x, encoder_output, src_mask, tgt_mask):
         x = self.residual_connection_1(
-            x, lambda x: self.self_attention_block(x, x, x, src_mask)
+            x, lambda x: self.self_attention_block(x, x, x, tgt_mask)
         )
         x = self.residual_connection_2(
             x,
             lambda x: self.cross_attention_block(
-                x, encoder_output, encoder_output, tgt_mask
+                x, encoder_output, encoder_output, src_mask
             ),
         )
         x = self.residual_connection_3(x, lambda x: self.feedforward_block(x))

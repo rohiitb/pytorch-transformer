@@ -9,4 +9,5 @@ def get_config():
         "src_lang": "en",
         "tgt_lang": "fr",
         "tokenizer_path": "tokenizers",
+        "checkpoint_path": "checkpoints",
     }

@@ -95,13 +95,13 @@ def get_dataset(config):
     max_len_tgt = 0
 
     for item in ds_raw:
-        src_ids = src_tokenizer.encode(item['translation'][config['src_lang']]).ids
-        tgt_ids = tgt_tokenizer.encode(item['translation'][config['tgt_lang']]).ids
+        src_ids = src_tokenizer.encode(item["translation"][config["src_lang"]]).ids
+        tgt_ids = tgt_tokenizer.encode(item["translation"][config["tgt_lang"]]).ids
         max_len_src = max(max_len_src, len(src_ids))
         max_len_tgt = max(max_len_tgt, len(tgt_ids))
 
-    print(f'Max length of source sentence: {max_len_src}')
-    print(f'Max length of target sentence: {max_len_tgt}')
+    print(f"Max length of source sentence: {max_len_src}")
+    print(f"Max length of target sentence: {max_len_tgt}")
 
     train_dataloader = DataLoader(
         train_ds, batch_size=config["batch_size"], shuffle=True
@@ -129,7 +129,13 @@ def greedy_decode(model, src, src_mask, src_tokenizer, tgt_tokenizer, max_len, d
         proj = model.project(output[:, -1])
         next_word = torch.argmax(proj, dim=1)
 
-        decoder_input = torch.cat([decoder_input, torch.empty(1, 1).type_as(src).fill_(next_word.item()).to(device)], dim=1)
+        decoder_input = torch.cat(
+            [
+                decoder_input,
+                torch.empty(1, 1).type_as(src).fill_(next_word.item()).to(device),
+            ],
+            dim=1,
+        )
 
         if next_word == eos_idx:
             break
@@ -162,13 +168,42 @@ def run_validation(
             count += 1
             if count == num_examples:
                 break
-    print("Returning")
 
     return
 
 
-def train(config):
-    device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_built() or torch.backends.mps.is_available() else "cpu"
+def load_checkpoint(checkpoint_path, model, optimizer):
+    if not os.path.exists(checkpoint_path):
+        return 0, None, 0, []
+
+    checkpoints = [f for f in os.listdir(checkpoint_path) if f.endswith(".pt")]
+    if not checkpoints:
+        return 0, None, 0, []
+
+    latest_checkpoint = max(
+        checkpoints, key=lambda x: int(x.split("_")[-1].split(".")[0])
+    )
+    checkpoint = torch.load(os.path.join(checkpoint_path, latest_checkpoint))
+
+    model.load_state_dict(checkpoint["model_state_dict"])
+    optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+    global_step = checkpoint["global_step"]
+    last_epoch = checkpoint["epoch"]
+    loss_list = checkpoint["loss_list"]
+
+    return global_step, latest_checkpoint, last_epoch, loss_list
+
+
+def train_model(config):
+    device = (
+        "cuda"
+        if torch.cuda.is_available()
+        else (
+            "mps"
+            if torch.backends.mps.is_built() or torch.backends.mps.is_available()
+            else "cpu"
+        )
+    )
     # device = "cpu"
     device = torch.device(device)
 
@@ -192,18 +227,29 @@ def train(config):
         ignore_index=tgt_tokenizer.token_to_id("[PAD]"), label_smoothing=0.1
     )
 
-    num_epochs = 1
+    num_epochs = config["num_epochs"]
 
     # Create a SummaryWriter instance
     log_dir = "runs/transformer_training"
+    checkpoint_path = config["checkpoint_path"]
     writer = SummaryWriter(log_dir)
 
-    global_step = 0
+    # Check for existing checkpoints and load if available
+    global_step, latest_checkpoint, last_epoch, loss_list = load_checkpoint(
+        checkpoint_path, model, optimizer
+    )
 
-    for epoch in range(num_epochs):
+    if latest_checkpoint:
+        print(f"Resuming from checkpoint: {latest_checkpoint}")
+    else:
+        print("Starting training from scratch")
+        os.makedirs(checkpoint_path, exist_ok=True)
+
+    for epoch in range(last_epoch, num_epochs):
         model.train()
         batch_iterator = tqdm(train_dataloader, desc=f"Epoch {epoch + 1}")
 
+        loss_per_batch = 0
         for batch in batch_iterator:
             encoder_input = batch["encoder_input"].to(device)
             decoder_input = batch["decoder_input"].to(device)
@@ -221,6 +267,7 @@ def train(config):
             loss = loss_fn(
                 proj_output.view(-1, tgt_tokenizer.get_vocab_size()), label.view(-1)
             )
+            loss_per_batch += loss.item()
             optimizer.zero_grad()
 
             loss.backward()
@@ -232,12 +279,29 @@ def train(config):
 
             batch_iterator.set_postfix({"loss": f"{loss.item():6.3f}"})
 
-            # start_time = time.time()
-            # run_validation(
-            #     model, val_dataloader, src_tokenizer, tgt_tokenizer, config["seq_length"], device, num_examples=1
-            # )
-            # end_time = time.time()
-            # print(f"Validation time: {end_time - start_time} seconds")
+        loss_per_batch /= len(train_dataloader)
+        loss_list.append(loss_per_batch)
+
+        run_validation(
+            model,
+            val_dataloader,
+            src_tokenizer,
+            tgt_tokenizer,
+            config["seq_length"],
+            device,
+            num_examples=1,
+        )
+
+        # Store the model checkpoint after each epoch
+        checkpoint = {
+            "epoch": epoch + 1,
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "loss": loss,
+            "global_step": global_step,
+            "loss_list": loss_list,
+        }
+        torch.save(checkpoint, f"{checkpoint_path}/model_epoch_{epoch+1}.pt")
 
     # Close the SummaryWriter
     writer.close()
@@ -245,4 +309,4 @@ def train(config):
 
 if __name__ == "__main__":
     config = get_config()
-    train(config)
+    train_model(config)

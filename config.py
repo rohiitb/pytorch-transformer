@@ -10,4 +10,6 @@ def get_config():
         "tgt_lang": "fr",
         "tokenizer_path": "tokenizers",
         "checkpoint_path": "checkpoints",
+        "local_rank": -1,
+        "global_rank": -1,
     }

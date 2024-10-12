@@ -165,11 +165,30 @@ def run_validation(
                 max_len,
                 device,
             )
+
+            src_text = batch["src_text"][0]
+            tgt_text = batch["tgt_text"][0]
+            model_output_text = tgt_tokenizer.decode(output.detach().cpu().numpy())
+
+            src_texts.append(src_text)
+            tgt_texts.append(tgt_text)
+            predicted_texts.append(model_output_text)
+
+            print(f"Source:     {src_text}")
+            print(f"Target:     {tgt_text}")
+            print(f"Predicted:  {model_output_text}")
+
             count += 1
             if count == num_examples:
                 break
 
-    return
+    metric = torchmetrics.BLEUScore()
+    bleu = metric(predicted_texts, tgt_texts)
+    print(f"BLEU score: {bleu}")
+
+    metric = torchmetrics.WordErrorRate()
+    wer = metric(predicted_texts, tgt_texts)
+    print(f"WER score: {wer}")
 
 
 def load_checkpoint(checkpoint_path, model, optimizer):
@@ -188,10 +207,10 @@ def load_checkpoint(checkpoint_path, model, optimizer):
     model.load_state_dict(checkpoint["model_state_dict"])
     optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
     global_step = checkpoint["global_step"]
-    last_epoch = checkpoint["epoch"]
+    initial_epoch = checkpoint["epoch"]
     loss_list = checkpoint["loss_list"]
 
-    return global_step, latest_checkpoint, last_epoch, loss_list
+    return global_step, latest_checkpoint, initial_epoch, loss_list
 
 
 def train_model(config):
@@ -235,7 +254,7 @@ def train_model(config):
     writer = SummaryWriter(log_dir)
 
     # Check for existing checkpoints and load if available
-    global_step, latest_checkpoint, last_epoch, loss_list = load_checkpoint(
+    global_step, latest_checkpoint, initial_epoch, loss_list = load_checkpoint(
         checkpoint_path, model, optimizer
     )
 
@@ -245,7 +264,7 @@ def train_model(config):
         print("Starting training from scratch")
         os.makedirs(checkpoint_path, exist_ok=True)
 
-    for epoch in range(last_epoch, num_epochs):
+    for epoch in range(initial_epoch, num_epochs):
         model.train()
         batch_iterator = tqdm(train_dataloader, desc=f"Epoch {epoch + 1}")
 
